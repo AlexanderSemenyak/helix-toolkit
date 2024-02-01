@@ -1,8 +1,9 @@
 ﻿// --------------------------------------------------------------------------------------------------------------------
-// <copyright file="RectangleSelectionCommand.cs" company="Helix Toolkit">
+// <copyright file="CombinedSelectionCommand.cs" company="Helix Toolkit">
 //   Copyright (c) 2014 Helix Toolkit contributors
 // </copyright>
 // <summary>
+//   Provides a command that raises an event returning the hit models at the mouse location when the mouse button is clicked.
 //   Provides a command that shows a rectangle when the mouse is dragged and raises an event returning the models contained in the rectangle
 //   when the mouse button is released.
 // </summary>
@@ -11,7 +12,10 @@
 namespace HelixToolkit.Wpf
 {
     using System;
+    using System.Collections.Generic;
     using System.Linq;
+    using System.Runtime.CompilerServices;
+    using System.Text;
     using System.Windows;
     using System.Windows.Controls;
     using System.Windows.Documents;
@@ -19,11 +23,16 @@ namespace HelixToolkit.Wpf
     using System.Windows.Media;
 
     /// <summary>
+    /// Provides a command that raises an event returning the hit models at the mouse location when the mouse button is clicked <br/>
     /// Provides a command that shows a rectangle when the mouse is dragged and raises an event returning the models contained in the rectangle
     /// when the mouse button is released.
     /// </summary>
-    public class RectangleSelectionCommand : SelectionCommand
+    public class CombinedSelectionCommand : SelectionCommand
     {
+        /// <summary>
+        /// The Tolerance
+        /// </summary>
+        private const double TOLERANCE = 1e-10;
         /// <summary>
         /// The selection rectangle.
         /// </summary>
@@ -35,6 +44,16 @@ namespace HelixToolkit.Wpf
         private RectangleAdorner rectangleAdorner;
 
         /// <summary>
+        /// Allow auto detect SelectionHitMode by mouse position<br/>
+        /// Default value is true
+        ///</summary>
+        /// <remarks>
+        /// If mouse dragged from left to right: SelectionHitMode = SelectionHitMode.Inside<br/>
+        /// Other SelectionHitMode = SelectionHitMode.Touch<br/>
+        /// </remarks>    
+        public bool AllowAutoSetSelectionHitMode { get; set; } = true;
+
+        /// <summary>
         /// The brush to color inside the rectangle
         /// </summary>
         public Brush FillRectangleBrush { get; set; }
@@ -44,7 +63,7 @@ namespace HelixToolkit.Wpf
         /// </summary>
         /// <param name="viewport">The viewport.</param>
         /// <param name="modelsSelectedEventHandler">The selection event handler.</param>
-        public RectangleSelectionCommand(Viewport3D viewport, EventHandler<ModelsSelectedEventArgs> modelsSelectedEventHandler)
+        public CombinedSelectionCommand(Viewport3D viewport, EventHandler<ModelsSelectedEventArgs> modelsSelectedEventHandler)
             : base(viewport, modelsSelectedEventHandler, null)
         {
         }
@@ -54,7 +73,7 @@ namespace HelixToolkit.Wpf
         /// </summary>
         /// <param name="viewport">The viewport.</param>
         /// <param name="visualsSelectedEventHandler">The selection event handler.</param>
-        public RectangleSelectionCommand(Viewport3D viewport, EventHandler<VisualsSelectedEventArgs> visualsSelectedEventHandler)
+        public CombinedSelectionCommand(Viewport3D viewport, EventHandler<VisualsSelectedEventArgs> visualsSelectedEventHandler)
             : base(viewport, null, visualsSelectedEventHandler)
         {
         }
@@ -65,7 +84,7 @@ namespace HelixToolkit.Wpf
         /// <param name="viewport">The viewport.</param>
         /// <param name="modelsSelectedEventHandler">The selection event handler.</param>
         /// <param name="visualsSelectedEventHandler">The selection event handler.</param>
-        public RectangleSelectionCommand(Viewport3D viewport, EventHandler<ModelsSelectedEventArgs> modelsSelectedEventHandler, EventHandler<VisualsSelectedEventArgs> visualsSelectedEventHandler)
+        public CombinedSelectionCommand(Viewport3D viewport, EventHandler<ModelsSelectedEventArgs> modelsSelectedEventHandler, EventHandler<VisualsSelectedEventArgs> visualsSelectedEventHandler)
             : base(viewport, modelsSelectedEventHandler, visualsSelectedEventHandler)
         {
         }
@@ -101,21 +120,67 @@ namespace HelixToolkit.Wpf
         protected override void Completed(ManipulationEventArgs e)
         {
             this.HideRectangle();
+            SetSelectionHitMode(e);
 
-            var res = this.Viewport.FindHits(this.selectionRect, this.SelectionHitMode);
-            
-            var selectedModels = res.Select(hit => hit.Model).ToList();
-
-            // We do not handle the point selection, unless no models are selected. If no models are selected, we clear the
-            // existing selection.
-            if (this.selectionRect.Size.Equals(default(Size)) && selectedModels.Any())
+            if (IsPointSelection())
             {
-                return;
+                HandlePointSelection();
+            }
+            else
+            {
+                HandleRectangleSelection();
             }
 
-            this.OnModelsSelected(new ModelsSelectedByRectangleEventArgs(selectedModels, this.selectionRect));
-            var selectedVisuals = res.Select(hit => hit.Visual).ToList();
-            this.OnVisualsSelected(new VisualsSelectedByRectangleEventArgs(selectedVisuals, this.selectionRect));
+            //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+            void HandlePointSelection()
+            {
+                IList<Viewport3DHelper.HitResult> res = this.Viewport.FindHits(this.selectionRect.Location);
+                var selectedModels = res.Select(hit => hit.Model).ToList();
+                this.OnModelsSelected(new ModelsSelectedByPointEventArgs(selectedModels, this.selectionRect.Location));
+                var selectedVisuals = res.Select(hit => hit.Visual).ToList();
+                this.OnVisualsSelected(new VisualsSelectedByPointEventArgs(selectedVisuals, this.selectionRect.Location));
+            }
+            //[MethodImpl(MethodImplOptions.AggressiveInlining)]
+            void HandleRectangleSelection()
+            {
+                IEnumerable<Viewport3DHelper.RectangleHitResult> res = this.Viewport.FindHits(this.selectionRect, this.SelectionHitMode);
+                var selectedModels = res.Select(hit => hit.Model).ToList();
+                this.OnModelsSelected(new ModelsSelectedByRectangleEventArgs(selectedModels, this.selectionRect));
+                var selectedVisuals = res.Select(hit => hit.Visual).ToList();
+                this.OnVisualsSelected(new VisualsSelectedByRectangleEventArgs(selectedVisuals, this.selectionRect));
+            }
+        }
+
+        /// <summary>
+        /// Determines whether the selection is a point selection or not
+        /// </summary>
+        /// <returns></returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsPointSelection()
+        {
+            return this.selectionRect.Width < TOLERANCE && this.selectionRect.Height < TOLERANCE;
+        }
+
+        /// <summary>
+        /// If <see cref="AllowAutoSetSelectionHitMode"/> is true,
+        /// the <see cref="SelectionHitMode"/> will be set automatically depending on:<br/>
+        /// - If mouse dragged from left to right: SelectionHitMode = SelectionHitMode.Inside<br/>
+        /// - Other SelectionHitMode = SelectionHitMode.Touch<br/>
+        /// </summary>
+        /// <param name="e"></param>
+        private void SetSelectionHitMode(ManipulationEventArgs e)
+        {
+            if (AllowAutoSetSelectionHitMode)
+            {
+                if (MouseDownPoint.X < e.CurrentPosition.X) //left -> right => Inside
+                {
+                    SelectionHitMode = SelectionHitMode.Inside;
+                }
+                else
+                {
+                    SelectionHitMode = SelectionHitMode.Touch;
+                }
+            }
         }
 
         /// <summary>
@@ -140,9 +205,7 @@ namespace HelixToolkit.Wpf
             {
                 myAdornerLayer.Remove(this.rectangleAdorner);
             }
-
             this.rectangleAdorner = null;
-
             this.Viewport.InvalidateVisual();
         }
 
@@ -155,7 +218,6 @@ namespace HelixToolkit.Wpf
             {
                 return;
             }
-
             this.rectangleAdorner.Rectangle = this.selectionRect;
             this.rectangleAdorner.InvalidateVisual();
         }
